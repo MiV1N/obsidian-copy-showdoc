@@ -794,8 +794,26 @@ class DocumentRenderer {
 
 		const dataUriPromise = new Promise<string>((resolve, reject) => {
 			image.onload = () => {
-				canvas.width = image.naturalWidth;
-				canvas.height = image.naturalHeight;
+				// 设置目标最小尺寸为1080
+		        const targetSize = 1080;
+		        let newWidth = targetSize;
+		        let newHeight = targetSize;
+		        
+		        if ( image.naturalWidth < targetSize || image.naturalHeight < targetSize) {
+					// 计算保持比例的缩放比例
+					if ( image.naturalWidth < image.naturalHeight ){
+					    newWidth = targetSize;
+					    const scale = targetSize / image.naturalWidth;
+					    newHeight = image.naturalHeight * scale;
+					}else{
+					    newHeight = targetSize;
+					    const scale = targetSize / image.naturalHeight;
+					    newWidth = image.naturalWidth * scale;
+					}
+		        }
+		        // 设置canvas的尺寸
+		        canvas.width = newWidth;
+		        canvas.height = newHeight;
 
 				ctx!.drawImage(image, 0, 0);
 
