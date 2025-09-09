@@ -815,7 +815,7 @@ class DocumentRenderer {
 		        canvas.width = newWidth;
 		        canvas.height = newHeight;
 
-				ctx!.drawImage(image, 0, 0);
+				ctx!.drawImage(image, 0, 0, canvas.width, canvas.height);
 
 				try {
 					const uri = canvas.toDataURL('image/png');
