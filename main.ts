@@ -305,7 +305,8 @@ type DocumentRendererOptions = {
 	removeDataviewMetadataLines: boolean,
 	footnoteHandling: FootnoteHandling
 	internalLinkHandling: InternalLinkHandling,
-	disableImageEmbedding: boolean
+	disableImageEmbedding: boolean,
+	imageMinSize: number
 };
 
 const documentRendererDefaults: DocumentRendererOptions = {
@@ -317,7 +318,8 @@ const documentRendererDefaults: DocumentRendererOptions = {
 	removeDataviewMetadataLines: false,
 	footnoteHandling: FootnoteHandling.REMOVE_LINK,
 	internalLinkHandling: InternalLinkHandling.CONVERT_TO_TEXT,
-	disableImageEmbedding: false
+	disableImageEmbedding: false,
+	imageMinSize: 1080,
 };
 
 /**
@@ -795,19 +797,19 @@ class DocumentRenderer {
 		const dataUriPromise = new Promise<string>((resolve, reject) => {
 			image.onload = () => {
 				// 设置目标最小尺寸为1080
-		        const targetSize = 1080;
-		        let newWidth = targetSize;
-		        let newHeight = targetSize;
+		        const imageMinSize = this.options.imageMinSize;
+		        let newWidth = imageMinSize;
+		        let newHeight = imageMinSize;
 		        
-		        if ( image.naturalWidth < targetSize || image.naturalHeight < targetSize) {
+		        if ( image.naturalWidth < imageMinSize || image.naturalHeight < imageMinSize) {
 					// 计算保持比例的缩放比例
 					if ( image.naturalWidth < image.naturalHeight ){
-					    newWidth = targetSize;
-					    const scale = targetSize / image.naturalWidth;
+					    newWidth = imageMinSize;
+					    const scale = imageMinSize / image.naturalWidth;
 					    newHeight = image.naturalHeight * scale;
 					}else{
-					    newHeight = targetSize;
-					    const scale = targetSize / image.naturalHeight;
+					    newHeight = imageMinSize;
+					    const scale = imageMinSize / image.naturalHeight;
 					    newWidth = image.naturalWidth * scale;
 					}
 		        }
@@ -965,6 +967,20 @@ class CopyDocumentAsHTMLSettingsTab extends PluginSettingTab {
 
 
 		containerEl.createEl('h3', {text: 'Rendering'});
+
+		new Setting(containerEl)  
+			.setName('Image minimum size')  
+			.setDesc('Image minimum size for image scaling (in pixels)')  
+			.addText(text => text  
+				.setPlaceholder('1080')  
+				.setValue(this.plugin.settings.imageMinSize.toString())  
+				.onChange(async (value) => {  
+					const numValue = parseInt(value);  
+					if (!isNaN(numValue) && numValue > 0) {  
+						this.plugin.settings.imageMinSize = numValue;  
+						await this.plugin.saveSettings();  
+					}  
+				}));
 
 		new Setting(containerEl)
 			.setName('Include filename as header')
@@ -1212,6 +1228,10 @@ type CopyDocumentAsHTMLSettings = {
 	 * Don't replace image links with data: uris. No idea why you would want this, but here you go.
 	 */
 	disableImageEmbedding: boolean;
+
+	/** min size for image scaling */  
+	imageMinSize: number;
+
 }
 
 const DEFAULT_SETTINGS: CopyDocumentAsHTMLSettings = {
