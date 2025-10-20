@@ -1,0 +1,120 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "默认模块",
+    "description": "",
+    "version": "1.0.0"
+  },
+  "tags": [],
+  "paths": {
+    "/server/index.php": {
+      "post": {
+        "summary": "创建更新文章",
+        "deprecated": false,
+        "description": "",
+        "tags": [],
+        "parameters": [
+          {
+            "name": "s",
+            "in": "query",
+            "description": "",
+            "required": false,
+            "example": "/api/page/save",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "user_token": {
+                    "description": "用户认证令牌",
+                    "example": "user_token_placeholder",
+                    "type": "string"
+                  },
+                  "item_id": {
+                    "type": "integer",
+                    "description": "项目 ID",
+                    "example": 0
+                  },
+                  "page_id": {
+                    "type": "integer",
+                    "description": "页面 ID(更新时必填,新建时不填)",
+                    "example": 0
+                  },
+                  "page_title": {
+                    "description": "页面标题",
+                    "example": "示例页面标题",
+                    "type": "string"
+                  },
+                  "page_content": {
+                    "description": "页面内容(Markdown 格式)",
+                    "example": "# 示例内容\n这是示例 Markdown 内容",
+                    "type": "string"
+                  },
+                  "page_comments": {
+                    "description": "页面备注",
+                    "example": "示例备注",
+                    "type": "string"
+                  },
+                  "cat_id": {
+                    "type": "integer",
+                    "description": "目录 ID",
+                    "example": 0
+                  },
+                  "s_number": {
+                    "type": "integer",
+                    "description": "排序号(默认 99)",
+                    "example": 99
+                  },
+                  "is_notify": {
+                    "type": "integer",
+                    "description": "是否发送通知(1=是, 0=否)",
+                    "example": 0
+                  },
+                  "ext_info": {
+                    "description": "扩展信息(JSON 格式)",
+                    "example": "{}",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "user_token",
+                  "page_title",
+                  "page_content",
+                  "cat_id"
+                ]
+              },
+              "examples": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            },
+            "headers": {}
+          }
+        },
+        "security": []
+      }
+    }
+  },
+  "components": {
+    "schemas": {},
+    "securitySchemes": {}
+  },
+  "servers": [],
+  "security": []
+}

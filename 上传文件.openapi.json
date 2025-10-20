@@ -1,0 +1,98 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "默认模块",
+    "description": "",
+    "version": "1.0.0"
+  },
+  "tags": [],
+  "paths": {
+    "/server/index.php": {
+      "post": {
+        "summary": "上传文件",
+        "deprecated": false,
+        "description": "",
+        "tags": [],
+        "parameters": [
+          {
+            "name": "s",
+            "in": "query",
+            "description": "",
+            "required": false,
+            "example": "/api/page/uploadImg",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "editormd-image-file": {
+                    "example": "file:///path/to/example.jpg",
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "user_token": {
+                    "example": "user_token_placeholder",
+                    "type": "string"
+                  },
+                  "item_id": {
+                    "type": "integer",
+                    "description": "项目 ID",
+                    "example": 0
+                  },
+                  "page_id": {
+                    "type": "integer",
+                    "description": "页面 ID",
+                    "example": 0
+                  }
+                }
+              },
+              "examples": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "url"
+                  ]
+                },
+                "example": {
+                  "success": 1,
+                  "url": "/api/attachment/visitFile?sign=file_sign_placeholder"
+                }
+              }
+            },
+            "headers": {}
+          }
+        },
+        "security": []
+      }
+    }
+  },
+  "components": {
+    "schemas": {},
+    "securitySchemes": {}
+  },
+  "servers": [],
+  "security": []
+}

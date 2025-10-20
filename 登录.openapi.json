@@ -1,0 +1,134 @@
+{
+	"openapi": "3.0.1",
+	"info": {
+		"title": "默认模块",
+		"description": "",
+		"version": "1.0.0"
+	},
+	"tags": [],
+	"paths": {
+		"/server/index.php": {
+			"post": {
+				"summary": "登录-老",
+				"deprecated": false,
+				"description": "",
+				"tags": [],
+				"parameters": [
+					{
+						"name": "s",
+						"in": "query",
+						"description": "",
+						"required": false,
+						"example": "/api/user/login",
+						"schema": {
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"content": {
+						"application/x-www-form-urlencoded": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"username": {
+										"example": "username",
+										"type": "string"
+									},
+									"password": {
+										"example": "password",
+										"type": "string"
+									}
+								}
+							},
+							"examples": {}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"properties": {
+										"error_code": {
+											"type": "integer"
+										},
+										"data": {
+											"type": "object",
+											"properties": {
+												"uid": {
+													"type": "string"
+												},
+												"username": {
+													"type": "string"
+												},
+												"name": {
+													"type": "string"
+												},
+												"groupid": {
+													"type": "string"
+												},
+												"avatar": {
+													"type": "null"
+												},
+												"avatar_small": {
+													"type": "null"
+												},
+												"email": {
+													"type": "null"
+												},
+												"email_verify": {
+													"type": "null"
+												},
+												"user_token": {
+													"type": "string"
+												}
+											},
+											"required": [
+												"uid",
+												"username",
+												"name",
+												"groupid",
+												"avatar",
+												"avatar_small",
+												"email",
+												"email_verify",
+												"user_token"
+											]
+										}
+									},
+									"required": ["error_code", "data"]
+								},
+								"example": {
+									"error_code": 0,
+									"data": {
+										"uid": "123",
+										"username": "demo_user",
+										"name": "示例用户",
+										"groupid": "1",
+										"avatar": null,
+										"avatar_small": null,
+										"email": null,
+										"email_verify": null,
+										"user_token": "user_token_placeholder"
+									}
+								}
+							}
+						},
+						"headers": {}
+					}
+				},
+				"security": []
+			}
+		}
+	},
+	"components": {
+		"schemas": {},
+		"securitySchemes": {}
+	},
+	"servers": [],
+	"security": []
+}
