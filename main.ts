@@ -9,10 +9,13 @@ import {
 	Notice,
 	Plugin,
 	PluginSettingTab,
+	requestUrl,
+	request,
 	Setting,
 	TAbstractFile,
 	TFile
 } from 'obsidian';
+// MultipartLite removed, now using Uint8Array directly
 
 /*
  * Generic lib functions
@@ -973,7 +976,7 @@ class CopyDocumentAsHTMLSettingsTab extends PluginSettingTab {
 			.setDesc('Image minimum size for image scaling (in pixels)')  
 			.addText(text => text  
 				.setPlaceholder('1080')  
-				.setValue(this.plugin.settings.imageMinSize.toString())  
+				.setValue((this.plugin.settings.imageMinSize || 1080).toString())  
 				.onChange(async (value) => {  
 					const numValue = parseInt(value);  
 					if (!isNaN(numValue) && numValue > 0) {  
@@ -990,7 +993,7 @@ class CopyDocumentAsHTMLSettingsTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.fileNameAsHeader = value;
 					await this.plugin.saveSettings();
-				}))
+				}));
 
 		new Setting(containerEl)
 			.setName('Copy HTML fragment only')
@@ -1163,6 +1166,75 @@ Note that the template is not used if the "Copy HTML fragment only" setting is e
 				});
 		});
 
+		containerEl.createEl('h3', {text: 'ShowDoc Settings'});
+
+		new Setting(containerEl)
+			.setName('ShowDoc URL')
+			.setDesc('The base URL of your ShowDoc instance.')
+			.addText(text => text
+				.setPlaceholder('https://your.showdoc.url')
+				.setValue(this.plugin.settings.showdocUrl)
+				.onChange(async (value) => {
+					this.plugin.settings.showdocUrl = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('ShowDoc Username')
+			.addText(text => text
+				.setValue(this.plugin.settings.showdocUsername)
+				.onChange(async (value) => {
+					this.plugin.settings.showdocUsername = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('ShowDoc Password')
+			.addText(text => text
+				.setValue(this.plugin.settings.showdocPassword)
+				.onChange(async (value) => {
+					this.plugin.settings.showdocPassword = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('ShowDoc Project ID')
+			.setDesc('The ID of the project in ShowDoc.')
+			.addText(text => text
+				.setValue(this.plugin.settings.showdocProjectId)
+				.onChange(async (value) => {
+					this.plugin.settings.showdocProjectId = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('ShowDoc Parent Directory')
+			.setDesc('Optional. A parent directory to place all uploaded notes under.')
+			.addText(text => text
+				.setValue(this.plugin.settings.showdocParentCat)
+				.onChange(async (value) => {
+					this.plugin.settings.showdocParentCat = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('ShowDoc API Key')
+			.addText(text => text
+				.setValue(this.plugin.settings.showdocApiKey)
+				.onChange(async (value) => {
+					this.plugin.settings.showdocApiKey = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('ShowDoc API Token')
+			.addText(text => text
+				.setValue(this.plugin.settings.showdocApiToken)
+				.onChange(async (value) => {
+					this.plugin.settings.showdocApiToken = value;
+					await this.plugin.saveSettings();
+				}));
+
 		containerEl.createEl('h3', {text: 'Exotic / Developer options'});
 
 		new Setting(containerEl)
@@ -1176,6 +1248,269 @@ Note that the template is not used if the "Copy HTML fragment only" setting is e
 				}));
 	}
 }
+
+/**
+ * Client for ShowDoc API
+ */
+class ShowDocClient {
+	private userToken: string | null = null;
+
+	constructor(private app: App, private settings: CopyDocumentAsHTMLSettings) {}
+
+	/**
+	 * 登录ShowDoc并获取用户token
+	 * @returns 用户认证token
+	 */
+	public async login(): Promise<string> {
+		// 如果已经有缓存的token，直接返回
+		if (this.userToken) {
+			return this.userToken;
+		}
+
+		// 验证登录凭证是否已配置
+		if (!this.settings.showdocUrl || !this.settings.showdocUsername || !this.settings.showdocPassword) {
+			new Notice('ShowDoc login credentials are not configured.');
+			throw new Error('ShowDoc login credentials are not configured.');
+		}
+
+		// 执行登录请求 - 符合OpenAPI规范，s作为查询参数
+		const loginBaseUrl = `${this.settings.showdocUrl}/server/index.php`;
+		const response = await requestUrl({
+			url: `${loginBaseUrl}?s=/api/user/login`,
+			method: 'POST',
+			// 添加跨域相关配置
+			headers: {
+				'Content-Type': 'application/x-www-form-urlencoded',
+				'Accept': 'application/json',
+			},
+			body: new URLSearchParams({
+				username: this.settings.showdocUsername,
+				password: this.settings.showdocPassword,
+			}).toString(),
+		});
+		console.log('Login response text:', response.text);
+
+		// 处理响应状态
+		if (response.status !== 200) {
+			throw new Error(`Failed to login to ShowDoc. Status: ${response.status}`);
+		}
+
+		// 处理登录结果
+		const data = response.json;
+		if (data.error_code !== 0) {
+			throw new Error(`ShowDoc login failed: ${data.error_message}`);
+		}
+
+		// 缓存并返回token
+		this.userToken = data.data?.user_token;
+		if (!this.userToken) {
+			throw new Error('Failed to get user token from ShowDoc response');
+		}
+		new Notice(`Logged in. Token starts with: ${this.userToken.substring(0, 8)}`);
+		return this.userToken;
+	}
+
+
+	/**
+	 * 上传图片到ShowDoc
+	 * @param file 要上传的文件
+	 * @param token 可选的 user token
+	 * @returns 上传后的图片URL
+	 */
+	async uploadImage(file: TFile, token?: string): Promise<string> {
+		try {
+			// 使用提供的token或自动获取
+			const userToken = token || this.userToken || await this.login();
+			console.log('Uploading image with userToken:', userToken);
+
+			// 构建基础URL，确保URL格式正确
+			let showdocUrl = this.settings.showdocUrl;
+			// 确保URL不以/结尾
+			if (showdocUrl.endsWith('/')) {
+				showdocUrl = showdocUrl.slice(0, -1);
+			}
+			const baseUploadUrl = `${showdocUrl}/server/index.php`;
+			console.log('Base upload URL:', baseUploadUrl);
+
+			// 读取文件内容
+			const fileContent = await this.app.vault.readBinary(file);
+			console.log('File content length:', fileContent.byteLength);
+			console.log('File name:', file.name);
+
+			// 生成边界
+			const genBoundary = () => {
+				return '---------------------------' + Math.random().toString(36).substring(2, 15);
+			};
+			const boundary = genBoundary();
+			const sBoundary = '--' + boundary + '\r\n';
+
+			// 根据文件扩展名动态设置Content-Type
+			let contentType = 'application/octet-stream';
+			const extension = file.name.split('.').pop()?.toLowerCase();
+			const mimeTypes: {[key: string]: string} = {
+				'png': 'image/png',
+				'jpg': 'image/jpeg',
+				'jpeg': 'image/jpeg',
+				'gif': 'image/gif',
+				'webp': 'image/webp',
+				'svg': 'image/svg+xml',
+				'bmp': 'image/bmp'
+			};
+			if (extension && mimeTypes[extension]) {
+				contentType = mimeTypes[extension];
+			}
+			console.log('Setting content type:', contentType, 'for file:', file.name);
+
+			// 创建文件部分的form-data
+			const fileForm = `${sBoundary}Content-Disposition: form-data; name="editormd-image-file"; filename="${file.name}"\r\nContent-Type: ${contentType}\r\n\r\n`;
+			const fileFormArray = new TextEncoder().encode(fileForm);
+
+			// 创建其他参数部分
+			let paramsBody = '';
+			paramsBody += `\r\n${sBoundary}Content-Disposition: form-data; name="user_token"\r\n\r\n${userToken}\r\n`;
+			
+			// 如果有项目ID，添加到表单数据中
+			if (this.settings.showdocProjectId) {
+				paramsBody += `${sBoundary}Content-Disposition: form-data; name="item_id"\r\n\r\n${this.settings.showdocProjectId}\r\n`;
+				console.log('Adding project ID:', this.settings.showdocProjectId);
+			}
+
+			const paramsBodyArray = new TextEncoder().encode(paramsBody);
+			const endBoundaryArray = new TextEncoder().encode('\r\n--' + boundary + '--\r\n');
+
+			// 合并所有Uint8Array
+			const formDataArray = new Uint8Array(
+				fileFormArray.length + 
+				fileContent.byteLength + 
+				paramsBodyArray.length + 
+				endBoundaryArray.length
+			);
+			
+			formDataArray.set(fileFormArray, 0);
+			formDataArray.set(new Uint8Array(fileContent), fileFormArray.length);
+			formDataArray.set(paramsBodyArray, fileFormArray.length + fileContent.byteLength);
+			formDataArray.set(endBoundaryArray, fileFormArray.length + fileContent.byteLength + paramsBodyArray.length);
+
+			console.log('Generated boundary:', boundary);
+			console.log('Form data length:', formDataArray.length);
+
+			// 发送图片上传请求
+			const response = await requestUrl({
+				url: `${baseUploadUrl}?s=/api/page/uploadImg`,
+				method: 'POST',
+				headers: {
+					'Accept': 'application/json',
+					'Content-Type': `multipart/form-data; boundary=${boundary}`
+				},
+				body: formDataArray.buffer,
+			});
+
+			// 处理响应状态 - 增强状态码处理
+			if (response.status < 200 || response.status >= 300) {
+				console.error('Upload failed with status:', response.status);
+				throw new Error(`Failed to upload image. Status: ${response.status}, Response: ${response.text || 'No response text'}`);
+			}
+
+			console.log('Upload response received, status:', response.status);
+			console.log('Response text preview:', response.text?.substring(0, 100) + '...');
+
+			// 处理上传结果，添加错误处理以防止JSON解析错误
+			let data;
+			try {
+				data = response.json;
+				// 检查data是否为有效的对象
+				if (!data || typeof data !== 'object') {
+					throw new Error('Invalid JSON response format');
+				}
+				console.log('Response data:', data);
+			} catch (jsonError) {
+				console.error('JSON parse error:', jsonError.message);
+				console.error('Raw response:', response.text);
+				throw new Error(`Failed to parse response as JSON: ${jsonError.message}, Response: ${response.text || 'No text available'}`);
+			}
+
+			// 检查上传是否成功
+			if (data.success !== 1) {
+				console.error('Upload failed:', data.error_message);
+				// 如果错误与token相关，清除缓存的token
+				if (data.error_message?.includes('token') || data.error_message?.includes('Token')) {
+					this.userToken = null;
+					console.log('Token cleared due to authentication error');
+				}
+				throw new Error(`ShowDoc image upload failed: ${data.error_message || 'Unknown error'}`);
+			}
+
+			// 返回图片URL
+			if (!data.url) {
+				throw new Error('Upload succeeded but no URL was returned');
+			}
+			console.log('Image uploaded successfully, URL:', data.url);
+			return data.url;
+		} catch (error) {
+			console.error('Image upload error:', error);
+			new Notice(`Failed to upload image: ${error.message}`);
+			throw error;
+		}
+	}
+
+
+	/**
+	 * 更新或创建ShowDoc文章
+	 * @param title 文章标题
+	 * @param content 文章内容
+	 * @param catName 分类名称
+	 */
+	async updateArticle(title: string, content: string, catName?: string, token?: string): Promise<void> {
+		// 使用提供的token或自动获取
+		const userToken = token || await this.login();
+		
+		// 验证API设置
+		if (!this.settings.showdocUrl || !this.settings.showdocApiKey || !this.settings.showdocApiToken) {
+			new Notice('ShowDoc API settings are not configured.');
+			throw new Error('ShowDoc API settings are not configured.');
+		}
+
+		// 构建基础URL，s参数将在请求时单独添加，符合OpenAPI规范
+		const baseUrl = `${this.settings.showdocUrl}/server/index.php`;
+		const response = await requestUrl({
+			url: `${baseUrl}?s=/api/item/updateByApi`,
+			method: 'POST',
+			// 添加跨域相关配置
+			headers: {
+				'Content-Type': 'application/json',
+				'Accept': 'application/json',
+			},
+			body: JSON.stringify({
+				api_key: this.settings.showdocApiKey,
+				api_token: this.settings.showdocApiToken,
+				user_token: userToken,
+				cat_name: catName || '',
+				page_title: title,
+				page_content: content,
+				s_number: 99, // 根据OpenAPI规范，这是必填字段，默认值为99
+			}),
+		});
+
+		// 处理响应状态
+		if (response.status !== 200) {
+			throw new Error(`Failed to update ShowDoc article. Status: ${response.status}`);
+		}
+
+		// 处理更新结果
+		const responseData = response.json;
+		if (responseData.error_code !== 0) {
+			// 如果错误与token相关，清除缓存的token
+			if (responseData.error_message?.includes('token') || responseData.error_message?.includes('Token')) {
+				this.userToken = null;
+			}
+			throw new Error(`ShowDoc API error: ${responseData.error_message}`);
+		}
+
+		// 显示成功通知
+		new Notice('Successfully uploaded to ShowDoc!');
+	}
+}
+
 
 type CopyDocumentAsHTMLSettings = {
 	/** Remove front-matter */
@@ -1232,6 +1567,14 @@ type CopyDocumentAsHTMLSettings = {
 	/** min size for image scaling */  
 	imageMinSize: number;
 
+	showdocUrl: string;
+	showdocUsername: string;
+	showdocPassword: string;
+	showdocProjectId: string;
+	showdocParentCat: string;
+
+	showdocApiKey: string;
+	showdocApiToken: string;
 }
 
 const DEFAULT_SETTINGS: CopyDocumentAsHTMLSettings = {
@@ -1250,6 +1593,15 @@ const DEFAULT_SETTINGS: CopyDocumentAsHTMLSettings = {
 	bareHtmlOnly: false,
 	fileNameAsHeader: false,
 	disableImageEmbedding: false,
+	imageMinSize: 1080,
+	showdocUrl: '',
+	showdocUsername: '',
+	showdocPassword: '',
+	showdocProjectId: '',
+	showdocParentCat: '',
+
+	showdocApiKey: '',
+	showdocApiToken: '',
 }
 
 export default class CopyDocumentAsHTMLPlugin extends Plugin {
@@ -1275,6 +1627,12 @@ export default class CopyDocumentAsHTMLPlugin extends Plugin {
 			id: 'copy-selection-as-html',
 			name: 'Copy current selection to clipboard',
 			checkCallback: this.buildCheckCallback(view => this.copyFromView(view, true))
+		});
+
+		this.addCommand({
+			id: 'upload-to-showdoc',
+			name: 'Upload document to ShowDoc',
+			checkCallback: this.buildCheckCallback(view => this.uploadToShowDoc(view))
 		});
 
 		// Register post-processors that keep track of the blocks being rendered. For explanation,
@@ -1409,6 +1767,79 @@ export default class CopyDocumentAsHTMLPlugin extends Plugin {
 		} catch (error) {
 			new Notice(`copy failed: ${error}`);
 			console.error('copy failed', error);
+		} finally {
+			copyIsRunning = false;
+		}
+	}
+
+	private async uploadToShowDoc(activeView: MarkdownView) {
+		if (!activeView.file) {
+			new Notice('No file in active view, nothing to upload');
+			return;
+		}
+
+		// 验证必要的ShowDoc设置
+		if (!this.settings.showdocUrl || !this.settings.showdocUsername || !this.settings.showdocPassword) {
+			new Notice('ShowDoc login credentials are not configured');
+			return;
+		}
+
+		if (!this.settings.showdocApiKey || !this.settings.showdocApiToken) {
+			new Notice('ShowDoc API key and token are not configured');
+			return;
+		}
+
+		console.log(`Uploading "${activeView.file.path}" to ShowDoc...`);
+		new Notice('Uploading to ShowDoc...');
+
+		const client = new ShowDocClient(this.app, this.settings);
+
+		try {
+			copyIsRunning = true;
+
+			// 先登录一次，获取并缓存token
+			const userToken = await client.login();
+			
+			let markdown = await this.app.vault.cachedRead(activeView.file);
+			const title = activeView.file.basename;
+
+			const imageRegex = /!\[\[(.*?)\]\]/g;
+			const imagePromises = [];
+			const imageMatches = [...markdown.matchAll(imageRegex)];
+
+			// 上传所有图片，传递同一个token
+			for (const match of imageMatches) {
+				const imageName = match[1];
+				const imageFile = this.app.metadataCache.getFirstLinkpathDest(imageName, activeView.file.path);
+				if (imageFile instanceof TFile) {
+					// 传递token以避免重复登录
+					imagePromises.push(client.uploadImage(imageFile, userToken).then(url => ({ name: imageName, url })));
+				}
+			}
+
+			const uploadedImages = await Promise.all(imagePromises);
+			const imageUrlMap = new Map(uploadedImages.map(img => [img.name, img.url]));
+
+			// 更新markdown中的图片链接
+			markdown = markdown.replace(imageRegex, (match, imageName) => {
+				if (imageUrlMap.has(imageName)) {
+					return `![](${imageUrlMap.get(imageName)})`;
+				}
+				return match; // 保留原始链接如果上传失败或不是图片
+			});
+
+			// 处理分类名称
+			let catName = activeView.file.parent?.path.replace(/\\/g, '/') || '';
+			if (this.settings.showdocParentCat) {
+				catName = `${this.settings.showdocParentCat}/${catName}`.replace(/^\/|\/$/, '');
+			}
+
+			// 更新文章，传递同一个token
+			await client.updateArticle(title, markdown, catName, userToken);
+
+		} catch (error) {
+			new Notice(`Upload to ShowDoc failed: ${error.message}`);
+			console.error('Upload to ShowDoc failed', error);
 		} finally {
 			copyIsRunning = false;
 		}

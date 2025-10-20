@@ -1,9 +1,9 @@
 {
-	"id": "copy-document-as-html",
-	"name": "Copy document as HTML",
+	"id": "copy-document-to-showdoc",
+	"name": "Copy document to showdoc",
 	"version": "0.8.2",
 	"minAppVersion": "1.6.3",
-	"description": "Copy the current document to clipboard as HTML, including images, diagrams etc...",
+	"description": "Copy the current document to showdoc, including images, diagrams etc...",
 	"author": "mvdkwast",
 	"authorUrl": "https://github.com/mvdkwast",
 	"isDesktopOnly": true
