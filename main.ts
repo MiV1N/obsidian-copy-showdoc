@@ -787,6 +787,82 @@ class DocumentRenderer {
 		}
 	}
 
+
+	/**
+	 * Draw image url to canvas and return as data uri containing image pixel data
+	 */
+	private async imageToBlob(url: string): Promise<string> {
+		const canvas = document.createElement('canvas');
+		const ctx = canvas.getContext('2d');
+
+		const image = new Image();
+		image.setAttribute('crossOrigin', 'anonymous');
+
+		const dataUriPromise = new Promise<string>((resolve, reject) => {
+			image.onload = () => {
+				// 设置目标最小尺寸为1080
+		        const imageMinSize = this.options.imageMinSize;
+		        let newWidth = imageMinSize;
+		        let newHeight = imageMinSize;
+		        
+		        if ( image.naturalWidth < imageMinSize || image.naturalHeight < imageMinSize) {
+					// 计算保持比例的缩放比例
+					if ( image.naturalWidth < image.naturalHeight ){
+					    newWidth = imageMinSize;
+					    const scale = imageMinSize / image.naturalWidth;
+					    newHeight = image.naturalHeight * scale;
+					}else{
+					    newHeight = imageMinSize;
+					    const scale = imageMinSize / image.naturalHeight;
+					    newWidth = image.naturalWidth * scale;
+					}
+		        }
+		        // 设置canvas的尺寸
+		        canvas.width = newWidth;
+		        canvas.height = newHeight;
+
+				ctx!.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+				try {
+					canvas.toBlob(
+						(blob) => {
+							if (blob) {
+								const objectUrl = URL.createObjectURL(blob);
+								resolve(objectUrl);
+							} else {
+								resolve(url);
+							}
+						},
+						'image/png'
+					);
+				} catch (err) {
+					// leave error at `log` level (not `error`), since we leave an url that may be workable
+					console.log(`failed ${url}`, err);
+					// if we fail, leave the original url.
+					// This way images that we may not load from external sources (tainted) may still be accessed
+					// (eg. plantuml)
+					// TODO: should we attempt to fallback with fetch ?
+					resolve(url);
+				}
+
+				canvas.remove();
+			}
+
+			image.onerror = (err) => {
+				console.log('could not load data uri');
+				// if we fail, leave the original url
+				resolve(url);
+			}
+		})
+
+		image.src = url;
+
+		return dataUriPromise;
+	}
+
+
+
+
 	/**
 	 * Draw image url to canvas and return as data uri containing image pixel data
 	 */
@@ -1453,6 +1529,145 @@ class ShowDocClient {
 		}
 	}
 
+	/**
+	 * 使用二进制数据上传图片到ShowDoc
+	 * @param file 模拟的文件对象
+	 * @param fileContent 二进制文件内容
+	 * @param token 可选的 user token
+	 * @returns 上传后的图片URL
+	 */
+	async uploadImageWithData(file: TFile, fileContent: Uint8Array, token?: string): Promise<string> {
+		try {
+			// 使用提供的token或自动获取
+			const userToken = token || this.userToken || await this.login();
+			console.log('Uploading image with data, userToken:', userToken);
+
+			// 构建基础URL，确保URL格式正确
+			let showdocUrl = this.settings.showdocUrl;
+			// 确保URL不以/结尾
+			if (showdocUrl.endsWith('/')) {
+				showdocUrl = showdocUrl.slice(0, -1);
+			}
+			const baseUploadUrl = `${showdocUrl}/server/index.php`;
+			console.log('Base upload URL:', baseUploadUrl);
+
+			console.log('File content length:', fileContent.byteLength);
+			console.log('File name:', file.name);
+
+			// 生成边界
+			const genBoundary = () => {
+				return '---------------------------' + Math.random().toString(36).substring(2, 15);
+			};
+			const boundary = genBoundary();
+			const sBoundary = '--' + boundary + '\r\n';
+
+			// 根据文件扩展名动态设置Content-Type
+			let contentType = 'application/octet-stream';
+			const extension = file.name.split('.').pop()?.toLowerCase();
+			const mimeTypes: {[key: string]: string} = {
+				'png': 'image/png',
+				'jpg': 'image/jpeg',
+				'jpeg': 'image/jpeg',
+				'gif': 'image/gif',
+				'webp': 'image/webp',
+				'svg': 'image/svg+xml',
+				'bmp': 'image/bmp'
+			};
+			if (extension && mimeTypes[extension]) {
+				contentType = mimeTypes[extension];
+			}
+			console.log('Setting content type:', contentType, 'for file:', file.name);
+
+			// 创建文件部分的form-data
+			const fileForm = `${sBoundary}Content-Disposition: form-data; name="editormd-image-file"; filename="${file.name}"\r\nContent-Type: ${contentType}\r\n\r\n`;
+			const fileFormArray = new TextEncoder().encode(fileForm);
+
+			// 创建其他参数部分
+			let paramsBody = '';
+			paramsBody += `\r\n${sBoundary}Content-Disposition: form-data; name="user_token"\r\n\r\n${userToken}\r\n`;
+			
+			// 如果有项目ID，添加到表单数据中
+			if (this.settings.showdocProjectId) {
+				paramsBody += `${sBoundary}Content-Disposition: form-data; name="item_id"\r\n\r\n${this.settings.showdocProjectId}\r\n`;
+				console.log('Adding project ID:', this.settings.showdocProjectId);
+			}
+
+			const paramsBodyArray = new TextEncoder().encode(paramsBody);
+			const endBoundaryArray = new TextEncoder().encode('\r\n--' + boundary + '--\r\n');
+
+			// 合并所有Uint8Array
+			const formDataArray = new Uint8Array(
+				fileFormArray.length + 
+				fileContent.byteLength + 
+				paramsBodyArray.length + 
+				endBoundaryArray.length
+			);
+			
+			formDataArray.set(fileFormArray, 0);
+			formDataArray.set(fileContent, fileFormArray.length);
+			formDataArray.set(paramsBodyArray, fileFormArray.length + fileContent.byteLength);
+			formDataArray.set(endBoundaryArray, fileFormArray.length + fileContent.byteLength + paramsBodyArray.length);
+
+			console.log('Generated boundary:', boundary);
+			console.log('Form data length:', formDataArray.length);
+
+			// 发送图片上传请求
+			const response = await requestUrl({
+				url: `${baseUploadUrl}?s=/api/page/uploadImg`,
+				method: 'POST',
+				headers: {
+					'Accept': 'application/json',
+					'Content-Type': `multipart/form-data; boundary=${boundary}`
+				},
+				body: formDataArray.buffer,
+			});
+
+			// 处理响应状态
+			if (response.status < 200 || response.status >= 300) {
+				console.error('Upload failed with status:', response.status);
+				throw new Error(`Failed to upload image. Status: ${response.status}, Response: ${response.text || 'No response text'}`);
+			}
+
+			console.log('Upload response received, status:', response.status);
+			console.log('Response text preview:', response.text?.substring(0, 100) + '...');
+
+			// 处理上传结果
+			let data;
+			try {
+				data = response.json;
+				if (!data || typeof data !== 'object') {
+					throw new Error('Invalid JSON response format');
+				}
+				console.log('Response data:', data);
+			} catch (jsonError) {
+				console.error('JSON parse error:', jsonError.message);
+				console.error('Raw response:', response.text);
+				throw new Error(`Failed to parse response as JSON: ${jsonError.message}, Response: ${response.text || 'No text available'}`);
+			}
+
+			// 检查上传是否成功
+			if (data.success !== 1) {
+				console.error('Upload failed:', data.error_message);
+				if (data.error_message?.includes('token') || data.error_message?.includes('Token')) {
+					this.userToken = null;
+					console.log('Token cleared due to authentication error');
+				}
+				throw new Error(`ShowDoc image upload failed: ${data.error_message || 'Unknown error'}`);
+			}
+
+			// 返回图片URL
+			if (!data.url) {
+				throw new Error('Upload succeeded but no URL was returned');
+			}
+			console.log('Image uploaded successfully with data, URL:', data.url);
+			return data.url;
+		} catch (error) {
+			console.error('Image upload with data error:', error);
+			new Notice(`Failed to upload image: ${error.message}`);
+			throw error;
+		}
+	}
+
 
 	/**
 	 * 更新或创建ShowDoc文章
@@ -1805,33 +2020,230 @@ export default class CopyDocumentAsHTMLPlugin extends Plugin {
 
 			// 修改图片正则表达式以支持带有额外参数的图片链接格式
 			// 匹配 ![[file]] 或 ![[file|width]] 或 ![[file#anchor]] 或 ![[file#anchor|width]] 等格式
-			const imageRegex = /!\[\[(.*?)(?:#.*?)?(?:\|.*?)?\]\]/g;
+			const imageRegex = /!\[\[([^||\]]+)(?:\|([^\]]+))?\]\]/gu; // Added 'g' and 'u' flags	
 			const imagePromises = [];
 			const imageMatches = [...markdown.matchAll(imageRegex)];
 
+
+			// 渲染Markdown以获取图片元素
+			const documentRenderer = new DocumentRenderer(this.app, this.settings);
+			const topNode = await documentRenderer.renderDocument(markdown, activeView.file.path);
+			const imgElements = topNode.querySelectorAll('img');
+
 			// 上传所有图片，传递同一个token
 			for (const match of imageMatches) {
-				// 提取完整的链接内容（包括可能的锚点和参数）
-				const fullLink = match[0];
-				// 提取实际的文件名部分（去除可能的锚点和参数）
-				let imageName = match[1];
-				
-				// 获取实际的文件引用
-				const imageFile = this.app.metadataCache.getFirstLinkpathDest(imageName, activeView.file.path);
-				if (imageFile instanceof TFile) {
-					// 传递token以避免重复登录
-					// 使用完整的链接作为map的key，以便在替换时能准确匹配
-					imagePromises.push(client.uploadImage(imageFile, userToken).then(url => ({ fullLink, url })));
+				try {
+					// 提取完整的链接内容（包括可能的锚点和参数）
+					const fullLink = match[0];
+					// 提取完整的路径部分（可能包含锚点）
+					const fullPathWithAnchor = match[1]; // 匹配第一组或第二组
+					// 提取基本文件名（用于获取文件引用）
+					let baseFileNameWithAnchor = fullPathWithAnchor.split('/').pop()!.split('\\').pop()!;
+					// 检查是否包含#^锚点部分
+					const hasAnchor = fullPathWithAnchor.includes('#^');
+					let fullPathWithoutAnchor = fullPathWithAnchor;
+					if (hasAnchor) {
+						fullPathWithoutAnchor = fullPathWithAnchor.split('#^')[0];
+					}
+					
+					console.log(`Processing image: ${fullPathWithAnchor}, Base filename: ${baseFileNameWithAnchor}, Has anchor: ${hasAnchor}`);
+					
+					// 获取实际的文件引用（使用基本文件名）
+					const imageFile = this.app.metadataCache.getFirstLinkpathDest(fullPathWithoutAnchor, activeView.file.path);
+					if (imageFile instanceof TFile) {
+
+						//在imgElements中匹配img元素，匹配方式为filesource属性或者alt中是否包含markdown中的文件名	
+						let imgElement: HTMLImageElement | null = null;
+						for (const imgNode of Array.from(imgElements)) {
+							const img = imgNode as HTMLImageElement;
+							const filesource = img.getAttribute('filesource');
+							console.log(`Image processing: Full path with anchor: ${fullPathWithAnchor}, Base filename: ${baseFileNameWithAnchor}, Filesource: ${filesource}`);
+							
+							// 检查filesource属性是否包含文件名,Excalidraw文件
+							if (filesource && filesource.includes(baseFileNameWithAnchor)) {
+								imgElement = img;
+								break;
+							}
+					
+							// 检查alt属性是否包含文件名
+							if (img.alt && img.alt.includes(baseFileNameWithAnchor) ) {
+								imgElement = img;
+								break;
+							}
+						}
+						
+						//如果没有找到img元素，跳过该文件
+						if (!imgElement) {
+							console.log(`No img element found for ${fullPathWithAnchor}, skip`);
+							// 直接上传文件
+							continue;
+						}
+
+						console.log(`Found img element for ${fullPathWithAnchor}, checking file type: ${imageFile.extension}`);
+					
+						// 检查是否需要特殊处理（svg嵌入或Excalidraw嵌入）
+						if (fullPathWithAnchor.includes('.svg') || 
+						   (fullPathWithAnchor.includes('excalidraw.md'))) {
+								console.log(`Special handling for ${imageFile.extension} file: ${fullPathWithAnchor}`);
+							
+							// 创建一个新的公共方法来处理图片转换，避免访问私有方法
+							try {
+								// 使用canvas将img元素转换为data URL
+								const canvas = document.createElement('canvas');
+								const ctx = canvas.getContext('2d');
+								if (!ctx) {
+									throw new Error('Could not create canvas context');
+								}
+								
+								// 创建一个新的Image对象
+								const tempImage = new Image();
+								const imageMinSize = this.settings.imageMinSize || 1080;
+								
+								// 使用Promise来处理图片加载
+								const dataUri = await new Promise<string>((resolve, reject) => {
+									tempImage.onload = () => {
+										// 计算尺寸
+										let newWidth = imageMinSize;
+										let newHeight = imageMinSize;
+										
+										if (tempImage.naturalWidth < imageMinSize || tempImage.naturalHeight < imageMinSize) {
+											if (tempImage.naturalWidth < tempImage.naturalHeight) {
+												newWidth = imageMinSize;
+												const scale = imageMinSize / tempImage.naturalWidth;
+												newHeight = tempImage.naturalHeight * scale;
+											} else {
+												newHeight = imageMinSize;
+												const scale = imageMinSize / tempImage.naturalHeight;
+												newWidth = tempImage.naturalWidth * scale;
+											}
+										}
+										
+										// 设置canvas尺寸
+										canvas.width = newWidth;
+										canvas.height = newHeight;
+										
+										// 绘制图片
+										ctx.drawImage(tempImage, 0, 0, canvas.width, canvas.height);
+										
+										try {
+											const uri = canvas.toDataURL('image/png');
+											resolve(uri);
+										} catch (err) {
+											console.error(`Failed to convert image to data URL: ${err}`);
+											reject(err);
+										}
+									};
+									
+									tempImage.onerror = (err) => {
+										console.error(`Could not load image: ${err}`);
+										reject(new Error('Failed to load image'));
+									};
+									
+									if (imgElement) {
+										tempImage.src = imgElement.src;
+									} else {
+										reject(new Error('Image element is null'));
+									}
+								});
+								if (!dataUri || !dataUri.startsWith('data:image/png;base64,')) {
+									throw new Error('Invalid data URI format or not a PNG image');
+								}
+								
+								// 从dataUri中提取base64数据
+								const base64Data = dataUri.split(',')[1];
+								if (!base64Data) {
+									throw new Error('Failed to extract base64 data');
+								}
+								
+								// 转换为Uint8Array
+								const byteCharacters = atob(base64Data);
+								const byteArray = new Uint8Array(byteCharacters.length);
+								for (let i = 0; i < byteCharacters.length; i++) {
+									byteArray[i] = byteCharacters.charCodeAt(i);
+								}
+								
+								// 创建一个新的唯一文件名，使用png扩展名和时间戳确保唯一性
+								const timestamp = Date.now();
+								const pngFileName = imageFile.name.replace(/\.[^/.]+$/, '') + `_${timestamp}.png`;
+								
+								console.log(`Converted ${fullPathWithAnchor} to ${pngFileName}, size: ${byteArray.length} bytes`);
+								
+								// 创建一个临时的TFile对象
+								const processedImageFile = {
+									...imageFile,
+									name: pngFileName,
+									extension: 'png'
+								} as TFile;
+								
+								// 使用修改后的文件对象和数据上传
+								imagePromises.push(client.uploadImageWithData(processedImageFile, byteArray, userToken).then(url => {
+									console.log(`Successfully uploaded converted image: ${url}`);
+									return { fullLink, url };
+								}).catch(error => {
+									console.error(`Failed to upload converted image ${fullPathWithAnchor}: ${error.message}`);
+									// 失败时尝试直接上传原始文件
+									return client.uploadImage(imageFile, userToken).then(url => ({ fullLink, url })).catch(fallbackError => {
+										console.error(`Fallback upload failed for ${fullPathWithAnchor}: ${fallbackError.message}`);
+										return { fullLink, url: null };
+									});
+								}));
+							} catch (conversionError) {
+								console.error(`Conversion error for ${fullPathWithAnchor}: ${conversionError.message}`);
+								// 转换失败时尝试直接上传原始文件
+								imagePromises.push(client.uploadImage(imageFile, userToken).then(url => ({ fullLink, url })).catch(fallbackError => {
+									console.error(`Fallback upload failed for ${fullPathWithAnchor}: ${fallbackError.message}`);
+									return { fullLink, url: null };
+								}));
+							}
+						} else {
+							// 普通图片文件直接上传
+							console.log(`Uploading regular image: ${fullPathWithAnchor}`);
+							imagePromises.push(client.uploadImage(imageFile, userToken).then(url => ({ fullLink, url })).catch(error => {
+								console.error(`Failed to upload regular image ${fullPathWithAnchor}: ${error.message}`);
+								return { fullLink, url: null };
+							}));
+						}
+					} else {
+						console.log(`File not found or not a TFile: ${fullPathWithAnchor}`);
+					}
+				} catch (error) {
+					console.error(`Error processing image match: ${error.message}`);
+					// 继续处理下一个图片，避免一个图片处理失败影响整体上传
 				}
 			}
 
 			const uploadedImages = await Promise.all(imagePromises);
+			console.log(`Total images processed: ${uploadedImages.length}`);
+			
+			// 过滤掉上传失败的图片（url为null）
+			const successfulUploads = uploadedImages.filter(img => img.url !== null);
+			console.log(`Successfully uploaded images: ${successfulUploads.length}`);
+			
 			// 使用完整链接作为key，以便准确替换
-			const imageUrlMap = new Map(uploadedImages.map(img => [img.fullLink, img.url]));
+			const imageUrlMap = new Map(successfulUploads.map(img => [img.fullLink, img.url]));
 
 			// 更新markdown中的图片链接
+			let replacementCount = 0;
 			for (const [fullLink, url] of imageUrlMap.entries()) {
-				markdown = markdown.replace(fullLink, `![](${url})`);
+				// 使用正则表达式进行全局替换，并转义特殊字符
+				const escapedLink = fullLink.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				const regex = new RegExp(escapedLink, 'g');
+				const matches = markdown.match(regex);
+				const originalLength = markdown.length;
+				markdown = markdown.replace(regex, `![](${url})`);
+				const replacements = matches ? matches.length : 0;
+				if (replacements > 0) {
+					replacementCount += replacements;
+					console.log(`Replaced ${replacements} occurrence(s) of link: ${fullLink.substring(0, 50)}... with URL: ${url}`);
+				}
+			}
+			
+			console.log(`Total image links replaced: ${replacementCount}`);
+			
+			// 如果有上传失败的图片，显示警告
+			if (uploadedImages.length > successfulUploads.length) {
+				const failedCount = uploadedImages.length - successfulUploads.length;
+				console.warn(`Warning: ${failedCount} images failed to upload`);
 			}
 
 			// 处理分类名称
