@@ -1803,30 +1803,36 @@ export default class CopyDocumentAsHTMLPlugin extends Plugin {
 			let markdown = await this.app.vault.cachedRead(activeView.file);
 			const title = activeView.file.basename;
 
-			const imageRegex = /!\[\[(.*?)\]\]/g;
+			// 修改图片正则表达式以支持带有额外参数的图片链接格式
+			// 匹配 ![[file]] 或 ![[file|width]] 或 ![[file#anchor]] 或 ![[file#anchor|width]] 等格式
+			const imageRegex = /!\[\[(.*?)(?:#.*?)?(?:\|.*?)?\]\]/g;
 			const imagePromises = [];
 			const imageMatches = [...markdown.matchAll(imageRegex)];
 
 			// 上传所有图片，传递同一个token
 			for (const match of imageMatches) {
-				const imageName = match[1];
+				// 提取完整的链接内容（包括可能的锚点和参数）
+				const fullLink = match[0];
+				// 提取实际的文件名部分（去除可能的锚点和参数）
+				let imageName = match[1];
+				
+				// 获取实际的文件引用
 				const imageFile = this.app.metadataCache.getFirstLinkpathDest(imageName, activeView.file.path);
 				if (imageFile instanceof TFile) {
 					// 传递token以避免重复登录
-					imagePromises.push(client.uploadImage(imageFile, userToken).then(url => ({ name: imageName, url })));
+					// 使用完整的链接作为map的key，以便在替换时能准确匹配
+					imagePromises.push(client.uploadImage(imageFile, userToken).then(url => ({ fullLink, url })));
 				}
 			}
 
 			const uploadedImages = await Promise.all(imagePromises);
-			const imageUrlMap = new Map(uploadedImages.map(img => [img.name, img.url]));
+			// 使用完整链接作为key，以便准确替换
+			const imageUrlMap = new Map(uploadedImages.map(img => [img.fullLink, img.url]));
 
 			// 更新markdown中的图片链接
-			markdown = markdown.replace(imageRegex, (match, imageName) => {
-				if (imageUrlMap.has(imageName)) {
-					return `![](${imageUrlMap.get(imageName)})`;
-				}
-				return match; // 保留原始链接如果上传失败或不是图片
-			});
+			for (const [fullLink, url] of imageUrlMap.entries()) {
+				markdown = markdown.replace(fullLink, `![](${url})`);
+			}
 
 			// 处理分类名称
 			let catName = activeView.file.parent?.path.replace(/\\/g, '/') || '';
