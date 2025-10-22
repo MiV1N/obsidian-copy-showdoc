@@ -2103,28 +2103,24 @@ export default class CopyDocumentAsHTMLPlugin extends Plugin {
 								const dataUri = await new Promise<string>((resolve, reject) => {
 									tempImage.onload = () => {
 										// 计算尺寸
-										let newWidth = imageMinSize;
-										let newHeight = imageMinSize;
-										
+										// 保持原始比例，仅当宽或高小于 imageMinSize 时才放大
+										let newWidth = tempImage.naturalWidth;
+										let newHeight = tempImage.naturalHeight;
+
 										if (tempImage.naturalWidth < imageMinSize || tempImage.naturalHeight < imageMinSize) {
-											if (tempImage.naturalWidth < tempImage.naturalHeight) {
-												newWidth = imageMinSize;
-												const scale = imageMinSize / tempImage.naturalWidth;
-												newHeight = tempImage.naturalHeight * scale;
-											} else {
-												newHeight = imageMinSize;
-												const scale = imageMinSize / tempImage.naturalHeight;
-												newWidth = tempImage.naturalWidth * scale;
-											}
+											const scale = Math.max(
+												imageMinSize / tempImage.naturalWidth,
+												imageMinSize / tempImage.naturalHeight
+											);
+											newWidth = tempImage.naturalWidth * scale;
+											newHeight = tempImage.naturalHeight * scale;
 										}
-										
-										// 设置canvas尺寸
+
+										// 设置 canvas 尺寸并绘制
 										canvas.width = newWidth;
 										canvas.height = newHeight;
-										
-										// 绘制图片
-										ctx.drawImage(tempImage, 0, 0, canvas.width, canvas.height);
-										
+										ctx.drawImage(tempImage, 0, 0, newWidth, newHeight);
+
 										try {
 											const uri = canvas.toDataURL('image/png');
 											resolve(uri);
@@ -2133,7 +2129,7 @@ export default class CopyDocumentAsHTMLPlugin extends Plugin {
 											reject(err);
 										}
 									};
-									
+
 									tempImage.onerror = (err) => {
 										console.error(`Could not load image: ${err}`);
 										reject(new Error('Failed to load image'));
