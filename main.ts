@@ -2082,21 +2082,38 @@ export default class CopyDocumentAsHTMLPlugin extends Plugin {
 						console.log(`Found img element for ${fullPathWithAnchor}, checking file type: ${imageFile.extension}`);
 					
 						// 检查是否需要特殊处理（svg嵌入或Excalidraw嵌入）
+						// 如果是手动输入的方式嵌入的excalidraw文件，引用的文件是.excalidraw,如果是在excalidraw中拷贝的连接，引用的文件是.excalidraw.md
 						if (fullPathWithAnchor.includes('.svg') || 
-						   (fullPathWithAnchor.includes('excalidraw.md'))) {
+						   (fullPathWithAnchor.includes('.excalidraw'))) {
 								console.log(`Special handling for ${imageFile.extension} file: ${fullPathWithAnchor}`);
-							
+								
 							// 创建一个新的公共方法来处理图片转换，避免访问私有方法
 							try {
-								// 使用canvas将img元素转换为data URL
+
+								let svgDataUri: string;
+								if (imageFile.extension === 'svg') {
+									// 直接从文件系统读取SVG内容，避免使用可能导致跨域问题的imgElement.src
+									const fileContent = await this.app.vault.readBinary(imageFile);
+									const textDecoder = new TextDecoder('utf-8');
+									const svgContent = textDecoder.decode(fileContent);
+									
+									// 创建一个数据URI，这样可以避免跨域问题
+									const dataUriPrefix = 'data:image/svg+xml;charset=utf-8,';
+										
+									const encodedSvgContent = encodeURIComponent(svgContent);
+									svgDataUri = dataUriPrefix + encodedSvgContent;
+								}
+
+								// 使用canvas将img/svg元素转换为data URL
 								const canvas = document.createElement('canvas');
 								const ctx = canvas.getContext('2d');
 								if (!ctx) {
 									throw new Error('Could not create canvas context');
 								}
 								
-								// 创建一个新的Image对象
+								// 创建一个新的Image对象，并设置crossOrigin以避免canvas污染问题
 								const tempImage = new Image();
+								tempImage.crossOrigin = "anonymous";
 								const imageMinSize = this.settings.imageMinSize || 1080;
 								
 								// 使用Promise来处理图片加载
@@ -2135,11 +2152,16 @@ export default class CopyDocumentAsHTMLPlugin extends Plugin {
 										reject(new Error('Failed to load image'));
 									};
 									
-									if (imgElement) {
+									if (imageFile.extension === 'svg') {
+										// 使用从文件系统读取的SVG内容创建的数据URI
+										tempImage.src = svgDataUri;
+									}else if (imgElement) {
+										// 直接使用img元素的src（添加null检查）
 										tempImage.src = imgElement.src;
 									} else {
 										reject(new Error('Image element is null'));
 									}
+									
 								});
 								if (!dataUri || !dataUri.startsWith('data:image/png;base64,')) {
 									throw new Error('Invalid data URI format or not a PNG image');
@@ -2276,10 +2298,27 @@ export default class CopyDocumentAsHTMLPlugin extends Plugin {
 			this.app.workspace.on("file-menu", (menu, file, view) => {
 				menu.addItem((item) => {
 					item
-						.setTitle("Copy as HTML")
-						.setIcon("clipboard-copy")
+						.setTitle("upload to showdoc")
+						.setIcon("upload")
 						.onClick(async () => {
-							return this.copyFromFile(file);
+							try {
+								// 尝试为文件创建一个临时的Markdown视图
+								await this.app.workspace.getLeaf(false).setViewState({
+									type: "markdown",
+									state: { file: file.path }
+								});
+								
+								// 再次获取活动视图
+								const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+								if (activeView) {
+									return this.uploadToShowDoc(activeView);
+								} else {
+									new Notice("Failed to create markdown view for upload");
+								}
+							} catch (error) {
+								console.error("Error in upload to showdoc:", error);
+								new Notice("Failed to upload to ShowDoc: " + (error instanceof Error ? error.message : String(error)));
+							}
 						});
 				});
 			})
