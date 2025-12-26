@@ -32,12 +32,18 @@ export class ShowDocUploader {
 			new Notice('Uploading to ShowDoc...');
 			const token = await this.client.login();
 
-			// 1. Process Transclusions (Recursively resolve ![[Note]])
-			// We process this first so that any images inside the transcluded notes are also handled in the next step.
+			// 1. Process Transclusions
 			const expandedMarkdown = await this.processTransclusions(markdown, file);
 
-			// 2. Process content (upload images, replace links)
-			const processedMarkdown = await this.replaceImagesInMarkdown(expandedMarkdown, file, token);
+			// 2. Process Callouts (Convert > [!type] to HTML)
+			// Do this before image replacement so images inside callouts work? 
+			// Or after? HTML inside markdown might affect image regex? 
+			// Better do it before image replacement, as image replacement relies on ![[...]] which is robust. 
+			// Callout conversion creates HTML <div>s, which are fine.
+			const markdownWithCallouts = this.processCallouts(expandedMarkdown);
+
+			// 3. Process content (upload images, replace links)
+			const processedMarkdown = await this.replaceImagesInMarkdown(markdownWithCallouts, file, token);
 
 			// Determine category
 			const catName = this.determineCategory(file);
@@ -51,6 +57,140 @@ export class ShowDocUploader {
 			new Notice(`ShowDoc upload failed: ${msg}`);
 		}
 	}
+
+	// ... (existing methods for category, transclusion, etc.)
+
+	/**
+	 * Converts Obsidian callouts to styled HTML divs.
+	 */
+	private processCallouts(markdown: string): string {
+		const lines = markdown.split('\n');
+		const resultLines: string[] = [];
+		let inCallout = false;
+		let calloutType = '';
+		let calloutTitle = '';
+		let calloutContent: string[] = [];
+
+		// Callout definitions
+		const calloutStyles: Record<string, { color: string, bg: string, icon: string, title: string }> = {
+			'note': { color: '#0c5460', bg: '#e7f3fe', icon: 'ℹ', title: 'Note' },
+			'abstract': { color: '#004085', bg: '#cce5ff', icon: '📋', title: 'Abstract' },
+			'info': { color: '#0c5460', bg: '#d1ecf1', icon: 'ℹ', title: 'Info' },
+			'todo': { color: '#004085', bg: '#cce5ff', icon: '✓', title: 'To Do' },
+			'tip': { color: '#155724', bg: '#d4edda', icon: '💡', title: 'Tip' },
+			'success': { color: '#155724', bg: '#d4edda', icon: '✔', title: 'Success' },
+			'question': { color: '#856404', bg: '#fff3cd', icon: '❓', title: 'Question' },
+			'warning': { color: '#856404', bg: '#fff3cd', icon: '⚠', title: 'Warning' },
+			'failure': { color: '#721c24', bg: '#f8d7da', icon: '❌', title: 'Failure' },
+			'danger': { color: '#721c24', bg: '#f8d7da', icon: '⚡', title: 'Danger' },
+			'bug': { color: '#721c24', bg: '#f8d7da', icon: '🐞', title: 'Bug' },
+			'error': { color: '#721c24', bg: '#f8d7da', icon: '✖', title: 'Error' },
+			'example': { color: '#383d41', bg: '#e2e3e5', icon: '📝', title: 'Example' },
+			'quote': { color: '#6c757d', bg: '#f8f9fa', icon: '💬', title: 'Quote' },
+		};
+		// Fallback for aliases or unknown types could map to 'note' or specific ones.
+		// Some maps:
+		const typeAliases: Record<string, string> = {
+			'tldr': 'abstract',
+			'faq': 'question',
+			'help': 'question',
+			'caution': 'danger',
+			'attention': 'warning',
+			'check': 'success',
+			'done': 'success',
+			'fail': 'failure',
+			'missing': 'failure',
+			'important': 'attention', // wait, attention -> warning
+			// Add simpler mappings logic later if needed
+		};
+
+
+		const closeCallout = () => {
+			if (!inCallout) return;
+
+			// Normalize type
+			let type = calloutType.toLowerCase();
+			if (typeAliases[type]) type = typeAliases[type];
+			const style = calloutStyles[type] || calloutStyles['note'];
+
+			// Build HTML
+			const titleHtml = `<strong style="display: block; margin-bottom: 5px;">${style.icon} ${calloutTitle || style.title}</strong>`;
+
+			// Should content be parsed as markdown? ShowDoc might support MD inside HTML if we just output the inner MD.
+			// But usually ShowDoc (Editor.md) might handle mixed HTML/MD okay, OR we might need to rely on the outer renderer.
+			// However, wrapping MD in <div> usually works in many parsers.
+			// We just strip the '> ' prefix.
+
+			// Remove first line if it's empty (padding)
+			if (calloutContent.length > 0 && calloutContent[0].trim() === '') calloutContent.shift();
+
+			const bodyText = calloutContent.join('\n');
+
+			const html = `<div style="padding: 15px; border-left: 5px solid #2196F3; border-color: ${style.color}; background-color: ${style.bg}; color: ${style.color}; border-radius: 4px; margin-bottom: 20px;">${titleHtml}${bodyText}</div>`;
+			resultLines.push(html);
+
+			inCallout = false;
+			calloutContent = [];
+		};
+
+		const calloutRegex = /^>\s*\[!\s*(\w+)\](.*)$/;
+
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			const match = line.match(calloutRegex);
+
+			if (match) {
+				// If already in callout, close it (though standard obsidian merges blockquotes if contiguous? 
+				// typically new callout header means new callout)
+				if (inCallout) {
+					closeCallout();
+				}
+
+				inCallout = true;
+				calloutType = match[1];
+				calloutTitle = match[2].trim();
+				calloutContent = [];
+				continue;
+			}
+
+			if (inCallout) {
+				// Check if line continues the blockquote
+				// Line must start with '>'
+				if (line.trim().startsWith('>')) {
+					// Strip the first '>' and optional space
+					let contentLine = line.trimStart();
+					if (contentLine.startsWith('>')) {
+						contentLine = contentLine.substring(1);
+						if (contentLine.startsWith(' ')) contentLine = contentLine.substring(1);
+					}
+					calloutContent.push(contentLine);
+				} else if (line.trim() === '') {
+					// Empty line inside a blockquote (in Obsidian source, often represented as just '>') 
+					// But if it's truly empty string in split, it breaks the blockquote usually unless next line has >.
+					// Obsidian handles "lazy" blockquotes sometimes?
+					// Safe regex assumption: if line has no '>', block ends.
+					closeCallout();
+					resultLines.push(line);
+				} else {
+					// Non-quoted line, ends callout
+					closeCallout();
+					resultLines.push(line);
+				}
+			} else {
+				resultLines.push(line);
+			}
+		}
+
+		// Close any processing callout at EOF
+		if (inCallout) {
+			closeCallout();
+		}
+
+		return resultLines.join('\n');
+	}
+
+	// ... (rest of methods like replaceImagesInMarkdown)
+
 
 	private determineCategory(file: TFile): string {
 		let catName = '';
