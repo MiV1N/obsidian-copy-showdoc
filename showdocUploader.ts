@@ -32,8 +32,12 @@ export class ShowDocUploader {
 			new Notice('Uploading to ShowDoc...');
 			const token = await this.client.login();
 
-			// Process content (upload images, replace links)
-			const processedMarkdown = await this.replaceImagesInMarkdown(markdown, file, token);
+			// 1. Process Transclusions (Recursively resolve ![[Note]])
+			// We process this first so that any images inside the transcluded notes are also handled in the next step.
+			const expandedMarkdown = await this.processTransclusions(markdown, file);
+
+			// 2. Process content (upload images, replace links)
+			const processedMarkdown = await this.replaceImagesInMarkdown(expandedMarkdown, file, token);
 
 			// Determine category
 			const catName = this.determineCategory(file);
@@ -63,6 +67,150 @@ export class ShowDocUploader {
 		}
 		// Normalize slashes just in case
 		return catName.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+	}
+
+	/**
+	 * Resolves ![[Note#Section]] style transclusions.
+	 * Content is wrapped in blockquotes (>).
+	 */
+	private async processTransclusions(markdown: string, sourceFile: TFile): Promise<string> {
+		// Regex for standard wikilink embed: ![[Path|Alt]] or ![[Path]]
+		// We capture: 1=Path (including #anchor), 2=Alt (optional)
+		const embedRegex = /!\[\[([^|\]]+)(?:\|([^\]]+))?\]\]/g;
+
+		// We need to replace async, so we gather matches first
+		// Note: We use a loop to handle replacements to handle multiple instances correctly
+
+		// Since we can't easily do async replace with string.replace, we'll build a map of replacements
+		const matches = [...markdown.matchAll(embedRegex)];
+		if (matches.length === 0) return markdown;
+
+		let newMarkdown = markdown;
+		const replacements = new Map<string, string>();
+
+		for (const match of matches) {
+			const fullMatch = match[0];
+			const linkPath = match[1];
+
+			// Skip if looks like an image or other asset (handled by image processor)
+			if (this.isAsset(linkPath)) {
+				continue;
+			}
+
+			try {
+				const content = await this.resolveTransclusion(linkPath, sourceFile);
+				if (content !== null) {
+					// Wrap in blockquote
+					const quotedContent = content.split('\n').map(line => `> ${line}`).join('\n');
+					replacements.set(fullMatch, quotedContent);
+				}
+			} catch (e) {
+				console.error(`Failed to resolve transclusion for ${linkPath}`, e);
+				// Leave as is if failed
+			}
+		}
+
+		// Apply replacements
+		for (const [key, value] of replacements) {
+			newMarkdown = newMarkdown.split(key).join(value + '\n');
+		}
+
+		return newMarkdown;
+	}
+
+	private isAsset(path: string): boolean {
+		const ext = path.split('.').pop()?.toLowerCase();
+		// Include excalidraw and other common non-markdown extensions
+		const assetExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'excalidraw'];
+		return ext ? assetExts.includes(ext) : false;
+	}
+
+	private async resolveTransclusion(linkPath: string, sourceFile: TFile): Promise<string | null> {
+		const { cleanPath, anchor } = this.parseLink(linkPath);
+
+		const targetFile = this.app.metadataCache.getFirstLinkpathDest(cleanPath, sourceFile.path);
+
+		// Strict check: Must be a TFile and must be markdown (.md)
+		if (!targetFile || !(targetFile instanceof TFile) || targetFile.extension !== 'md') {
+			return null;
+		}
+
+		const fileContent = await this.app.vault.read(targetFile);
+
+		if (!anchor) {
+			// Whole file
+			return fileContent;
+		}
+
+		const cache = this.app.metadataCache.getFileCache(targetFile);
+		if (!cache) return fileContent;
+
+		if (anchor.startsWith('^')) {
+			// Block reference
+			const blockId = anchor.substring(1);
+			if (cache.blocks && cache.blocks[blockId]) {
+				const block = cache.blocks[blockId];
+				return this.substringLines(fileContent, block.position.start.line, block.position.end.line);
+			}
+		} else {
+			// Header reference
+			// Heading matching is fuzzy (case-insensitive usually in Obsidian?) - let's try exact first
+			// Anchors in linkPath usually come as "Header Name" or "Group#Header"
+			// The linkPath passed here is stripped of # by parseLink? No, parseLink separates it.
+
+			if (cache.headings) {
+				const headingName = anchor;
+				// Find matching heading
+				const headingIndex = cache.headings.findIndex(h => h.heading === headingName);
+				if (headingIndex >= 0) {
+					const startHeading = cache.headings[headingIndex];
+					const startLine = startHeading.position.start.line;
+					let endLine = -1;
+
+					// Find end: next heading of same or lower level (numerically smaller or equal?)
+					// H1=1, H2=2. Subsections are higher level number.
+					// We stop at next heading where level <= startHeading.level
+					for (let i = headingIndex + 1; i < cache.headings.length; i++) {
+						const h = cache.headings[i];
+						if (h.level <= startHeading.level) {
+							endLine = h.position.start.line - 1;
+							break;
+						}
+					}
+
+					// If no end heading found, go to end of file? 
+					// Or end of sections? MetadataCache usually behaves well.
+					// We can also check sections or just take to EOF.
+
+					if (endLine === -1) {
+						// To end of file?
+						// Read simply to end
+						return this.substringLines(fileContent, startLine);
+					}
+					return this.substringLines(fileContent, startLine, endLine);
+				}
+			}
+		}
+
+		// Fallback: return whole content or null?
+		return null;
+	}
+
+	private parseLink(linkPath: string) {
+		// linkPath is like "Folder/File#Header" or "File#^blockid"
+		// We already stripped |Alt in previous step regex match
+		const parts = linkPath.split('#');
+		const cleanPath = parts[0];
+		const anchor = parts.length > 1 ? parts[1] : null;
+		return { cleanPath, anchor };
+	}
+
+	private substringLines(content: string, startLine: number, endLine?: number): string {
+		const lines = content.split('\n');
+		if (endLine === undefined) {
+			return lines.slice(startLine).join('\n');
+		}
+		return lines.slice(startLine, endLine + 1).join('\n');
 	}
 
 	private async replaceImagesInMarkdown(markdown: string, containingFile: TFile, token: string): Promise<string> {
