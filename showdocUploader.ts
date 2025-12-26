@@ -437,9 +437,14 @@ export class ShowDocUploader {
 	}
 
 	private findMatchingImgElement(baseName: string, elements: HTMLImageElement[]): HTMLImageElement | null {
-		for (const img of elements) {
+		for (let i = 0; i < elements.length; i++) {
+			const img = elements[i];
 			const src = img.getAttribute('filesource') || img.alt || '';
-			if (src.includes(baseName)) {
+			// Decode src to handle URL encoding (e.g. spaces -> %20)
+			const decodedSrc = decodeURIComponent(src);
+
+			if (decodedSrc.includes(baseName) || src.includes(baseName)) {
+				elements.splice(i, 1); // Consume the element so it's not reused
 				return img;
 			}
 		}
