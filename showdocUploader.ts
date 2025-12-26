@@ -196,14 +196,11 @@ export class ShowDocUploader {
 		let catName = '';
 		if (this.settings.showdocParentCat) {
 			catName = this.settings.showdocParentCat;
-			if (file.parent) {
-				// Determine if we should append direct parent. 
-				// Original logic seemed to try appending parent name if it exists.
-				// We keep it simple: if there is a parent, append it.
-				catName += `/${file.parent.name}`;
+			if (file.parent && !file.parent.isRoot()) {
+				catName += `/${file.parent.path}`;
 			}
-		} else if (file.parent) {
-			catName = file.parent.name;
+		} else if (file.parent && !file.parent.isRoot()) {
+			catName = file.parent.path;
 		}
 		// Normalize slashes just in case
 		return catName.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
@@ -341,7 +338,8 @@ export class ShowDocUploader {
 		// We already stripped |Alt in previous step regex match
 		const parts = linkPath.split('#');
 		const cleanPath = parts[0];
-		const anchor = parts.length > 1 ? parts[1] : null;
+		// Handle case where header itself might contain # (unlikely but possible)
+		const anchor = parts.length > 1 ? parts.slice(1).join('#') : null;
 		return { cleanPath, anchor };
 	}
 
