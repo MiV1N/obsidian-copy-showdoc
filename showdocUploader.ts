@@ -220,8 +220,28 @@ export class ShowDocUploader {
 	 * Content is wrapped in blockquotes (>).
 	 */
 	private async processTransclusions(markdown: string, sourceFile: TFile): Promise<string> {
+		
 		// Regex for standard wikilink embed: ![[Path|Alt]] or ![[Path]]
 		// We capture: 1=Path (including #anchor), 2=Alt (optional)
+		
+		// A. 基础嵌入（只有文件名）
+		// 	输入： ![[My Image.png]]
+		// 	组 1 (文件名): My Image.png
+		// 	组 2: undefined (或 null)
+		// B. 带参数/别名的嵌入（用竖线分隔）
+		// 	输入： ![[Internal File|Display Name]]
+		// 	组 1: Internal File
+		// 	组 2: Display Name
+		// C. 带尺寸限制的图片（Obsidian 常见用法）
+		// 	输入： ![[photo.jpg|300]]
+		// 	组 1: photo.jpg
+		// 	组 2: 300
+		// D. 带锚点的引用
+		// 	输入： ![[Daily Note#Tasks]]
+		// 	组 1: Daily Note#Tasks
+		// 	组 2: undefined
+
+		
 		const embedRegex = /!\[\[([^|\]]+)(?:\|([^\]]+))?\]\]/g;
 
 		// We need to replace async, so we gather matches first
@@ -235,8 +255,12 @@ export class ShowDocUploader {
 		const replacements = new Map<string, string>();
 
 		for (const match of matches) {
-			const fullMatch = match[0];
-			const linkPath = match[1];
+			const fullMatch = match[0]; // 完整匹配的字符，如: ![[MCP在确认逻辑.excalidraw.md#^frame=Lq0rAv172oEUG4AX4sDR5|800]]
+			const linkPath = match[1];  // 匹配的分组1,带锚点，如: MCP在确认逻辑.excalidraw.md#^frame=Lq0rAv172oEUG4AX4sDR5
+
+			this.debug(`fullMatch: ${fullMatch}`);
+			this.debug(`Group1(linkPath): ${linkPath}`);
+			this.debug(`Group2: ${match[2]}`);
 
 			// Skip if looks like an image or other asset (handled by image processor)
 			if (this.isAsset(linkPath)) {
@@ -265,12 +289,16 @@ export class ShowDocUploader {
 	}
 
 	private isAsset(path: string): boolean {
+		// Remove anchor/frame reference before checking extension
+		// e.g., "file.excalidraw.md#^frame=xxx" -> "file.excalidraw.md"
+		const cleanPath = path.split('#')[0];  // "file.excalidraw.md"
+
 		// Check for excalidraw.md first (since it has two extensions)
-		if (path.endsWith('.excalidraw.md') || path.endsWith('.excalidraw')) {
+		if (cleanPath.endsWith('.excalidraw.md')) {
 			this.debug(`isAsset: ${path} -> true (excalidraw)`);
 			return true;
 		}
-		const ext = path.split('.').pop()?.toLowerCase();
+		const ext = cleanPath.split('.').pop()?.toLowerCase();
 		// Include excalidraw and other common non-markdown extensions
 		const assetExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'excalidraw'];
 		const result = ext ? assetExts.includes(ext) : false;
@@ -368,7 +396,7 @@ export class ShowDocUploader {
 	}
 
 	private async replaceImagesInMarkdown(markdown: string, containingFile: TFile, token: string): Promise<string> {
-		// Regex to find ![[image|...]] or ![[image]] style links
+		// 正则表达式查找 ![[image|...]] 或 ![[image]] 格式的链接
 		const imageRegex = /!\[\[([^||\]]+)(?:\|([^\]]+))?\]\]/gu;
 		const matches = [...markdown.matchAll(imageRegex)];
 
@@ -376,18 +404,26 @@ export class ShowDocUploader {
 			return markdown;
 		}
 
-		// Render document once to find actual <img> elements (needed for Excalidraw/SVGs sometimes for properties)
+		// 渲染文档一次以查找实际的 <img> 元素（处理 Excalidraw/SVG 时需要获取属性）
 		const documentRenderer = new DocumentRenderer(this.app, this.settings);
 		const topNode = await documentRenderer.renderDocument(markdown, containingFile.path);
 		const imgElements = Array.from(topNode.querySelectorAll('img'));
 
 		console.log(`Found ${matches.length} image references.`);
 
-		this.debug('Rendered img elements:', imgElements.map(img => ({
-			src: img.src.substring(0, 100) + '...',
-			alt: img.alt,
-			filesource: img.getAttribute('filesource')
-		})));
+		this.debug('Rendered img elements:', imgElements.map((img, idx) => {
+			// Show more info about src to help with matching
+			let srcInfo = img.src || '';
+			if (srcInfo.startsWith('data:')) {
+				srcInfo = srcInfo.substring(0, 50) + '...';
+			}
+			return {
+				index: idx,
+				src: srcInfo,
+				alt: img.alt,
+				filesource: img.getAttribute('filesource')
+			};
+		}));
 
 		const uploadPromises = matches.map(match =>
 			this.processSingleImage(match, containingFile, imgElements, token)
@@ -480,12 +516,23 @@ export class ShowDocUploader {
 
 		for (let i = 0; i < elements.length; i++) {
 			const img = elements[i];
-			const src = img.getAttribute('filesource') || img.alt || '';
+			// 如果是 excalidraw.md 匹配的节点不在img中，而是在父节点的filesource中
+			// <p dir="auto">
+			// 	<div class="excalidraw-svg">
+			// 		<div style="max-width:1200px; " class="excalidraw-svg excalidraw-embedded-img excalidraw-canvas-immersive" filesource="💼项目信息/方案/ChatX系列/大模型支撑平台/大模型支撑平台方案3.0/小方案/支持MCP服务/ChatX对接MCP/MCP在确认逻辑.excalidraw.md#^frame=Lq0rAv172oEUG4AX4sDR5" w="1200" draggable="false" oncanvas="false">
+			// 			<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEKuyj6AAAAABJRU5ErkJggg==" style="">
+			// 		</div>
+			// 	</div>
+			// </p>
+
+			const filesource = img.getAttribute('filesource') || img.parentElement?.getAttribute('filesource') || '';
+			const src = filesource || img.alt || '';
 			// Decode src to handle URL encoding (e.g. spaces -> %20)
 			const decodedSrc = decodeURIComponent(src);
 
 			this.debug(`  Checking element ${i}:`, {
 				filesource: img.getAttribute('filesource'),
+				parentFilesource: img.parentElement?.getAttribute('filesource'),
 				alt: img.alt,
 				decodedSrc
 			});
