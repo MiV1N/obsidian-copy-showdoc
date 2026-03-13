@@ -101,6 +101,9 @@ export type CopyDocumentAsHTMLSettings = {
 
 	showdocApiKey: string;
 	showdocApiToken: string;
+
+	/** Enable debug logging */
+	debug: boolean;
 }
 
 export const DEFAULT_SETTINGS: CopyDocumentAsHTMLSettings = {
@@ -128,6 +131,8 @@ export const DEFAULT_SETTINGS: CopyDocumentAsHTMLSettings = {
 
 	showdocApiKey: '',
 	showdocApiToken: '',
+
+	debug: false,
 }
 
 
@@ -470,6 +475,16 @@ Note that the template is not used if the "Copy HTML fragment only" setting is e
 				.setValue(this.plugin.settings.disableImageEmbedding)
 				.onChange(async (value) => {
 					this.plugin.settings.disableImageEmbedding = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Debug mode')
+			.setDesc('Enable debug logging for ShowDoc uploader. Useful for troubleshooting image matching and upload issues.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.debug)
+				.onChange(async (value) => {
+					this.plugin.settings.debug = value;
 					await this.plugin.saveSettings();
 				}));
 	}

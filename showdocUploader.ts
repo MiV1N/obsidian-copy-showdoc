@@ -22,6 +22,15 @@ export class ShowDocUploader {
 	}
 
 	/**
+	 * Debug logging helper
+	 */
+	private debug(...args: unknown[]): void {
+		if (this.settings.debug) {
+			console.log('[ShowDocUploader DEBUG]', ...args);
+		}
+	}
+
+	/**
 	 * Main entry point to upload a markdown file
 	 * @param markdown Markdown content
 	 * @param title Title for the article
@@ -256,10 +265,17 @@ export class ShowDocUploader {
 	}
 
 	private isAsset(path: string): boolean {
+		// Check for excalidraw.md first (since it has two extensions)
+		if (path.endsWith('.excalidraw.md') || path.endsWith('.excalidraw')) {
+			this.debug(`isAsset: ${path} -> true (excalidraw)`);
+			return true;
+		}
 		const ext = path.split('.').pop()?.toLowerCase();
 		// Include excalidraw and other common non-markdown extensions
 		const assetExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'excalidraw'];
-		return ext ? assetExts.includes(ext) : false;
+		const result = ext ? assetExts.includes(ext) : false;
+		this.debug(`isAsset: ${path} -> ${result} (ext: ${ext})`);
+		return result;
 	}
 
 	private async resolveTransclusion(linkPath: string, sourceFile: TFile): Promise<string | null> {
@@ -367,6 +383,12 @@ export class ShowDocUploader {
 
 		console.log(`Found ${matches.length} image references.`);
 
+		this.debug('Rendered img elements:', imgElements.map(img => ({
+			src: img.src.substring(0, 100) + '...',
+			alt: img.alt,
+			filesource: img.getAttribute('filesource')
+		})));
+
 		const uploadPromises = matches.map(match =>
 			this.processSingleImage(match, containingFile, imgElements, token)
 		);
@@ -392,8 +414,11 @@ export class ShowDocUploader {
 		const fullLink = match[0];
 		const linkPath = match[1]; // path part e.g. "Assets/Image.png" or "Image.png"
 
+		this.debug('Processing image:', { fullLink, linkPath });
+
 		try {
 			const { baseName, cleanPath } = this.parseLinkPath(linkPath);
+			this.debug('Parsed link path:', { baseName, cleanPath });
 
 			// Resolve file
 			const imageFile = this.app.metadataCache.getFirstLinkpathDest(cleanPath, containingFile.path);
@@ -403,19 +428,25 @@ export class ShowDocUploader {
 				return { fullLink, url: null };
 			}
 
+			this.debug('Resolved file:', { name: imageFile.name, path: imageFile.path, extension: imageFile.extension });
+
 			// Find corresponding DOM element if needed (for Excalidraw etc)
 			const imgElement = this.findMatchingImgElement(baseName, imgElements);
+			this.debug('Matching img element:', imgElement ? 'FOUND' : 'NOT FOUND');
 
 			let url: string | null = null;
 
 			if (this.isConvertible(imageFile, cleanPath)) {
 				// Handle conversions (SVG/Excalidraw)
+				this.debug('File is convertible, handling with conversion');
 				url = await this.handleConvertibleImage(imageFile, imgElement, token);
 			} else {
 				// Regular upload
+				this.debug('File is regular image, uploading directly');
 				url = await this.uploadRegularImage(imageFile, token);
 			}
 
+			this.debug('Upload result:', url ? 'SUCCESS' : 'FAILED');
 			return { fullLink, url };
 
 		} catch (error) {
@@ -437,17 +468,39 @@ export class ShowDocUploader {
 	}
 
 	private findMatchingImgElement(baseName: string, elements: HTMLImageElement[]): HTMLImageElement | null {
+		// For excalidraw.md files, also try matching without the .md extension
+		const alternativeNames = [baseName];
+		if (baseName.endsWith('.excalidraw.md')) {
+			alternativeNames.push(baseName.replace('.md', ''));
+		} else if (baseName.endsWith('.md')) {
+			alternativeNames.push(baseName.slice(0, -3));
+		}
+
+		this.debug('Looking for img element matching:', { baseName, alternativeNames });
+
 		for (let i = 0; i < elements.length; i++) {
 			const img = elements[i];
 			const src = img.getAttribute('filesource') || img.alt || '';
 			// Decode src to handle URL encoding (e.g. spaces -> %20)
 			const decodedSrc = decodeURIComponent(src);
 
-			if (decodedSrc.includes(baseName) || src.includes(baseName)) {
-				elements.splice(i, 1); // Consume the element so it's not reused
-				return img;
+			this.debug(`  Checking element ${i}:`, {
+				filesource: img.getAttribute('filesource'),
+				alt: img.alt,
+				decodedSrc
+			});
+
+			// Try matching with any of the alternative names
+			for (const name of alternativeNames) {
+				if (decodedSrc.includes(name) || src.includes(name)) {
+					this.debug(`  -> MATCHED with name: ${name}`);
+					elements.splice(i, 1); // Consume the element so it's not reused
+					return img;
+				}
 			}
 		}
+
+		this.debug('  -> NO MATCH FOUND');
 		return null;
 	}
 
