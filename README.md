@@ -14,7 +14,7 @@ This plugin exposes the `Copy document as HTML` command, which can be bound to k
 
 **使用方法：**
 
-1. 确保您已经完成了 ShowDoc 相关配置（请参考插件设置页面）(由于我懒，所以需要配置账户密码之外还要配置 token)
+1. 确保您已经完成了 ShowDoc 相关配置（请参考插件设置页面）
 2. 在 Obsidian 中打开需要上传的文档
 3. 使用命令面板（Ctrl+P）运行 `Upload document to ShowDoc` 命令
 4. 根据提示完成上传操作
