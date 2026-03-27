@@ -94,8 +94,6 @@ export type CopyDocumentAsHTMLSettings = {
 	imageMinSize: number;
 
 	showdocUrl: string;
-	showdocUsername: string;
-	showdocPassword: string;
 	showdocProjectId: string;
 	showdocParentCat: string;
 
@@ -124,8 +122,6 @@ export const DEFAULT_SETTINGS: CopyDocumentAsHTMLSettings = {
 	disableImageEmbedding: false,
 	imageMinSize: 1080,
 	showdocUrl: '',
-	showdocUsername: '',
-	showdocPassword: '',
 	showdocProjectId: '',
 	showdocParentCat: '',
 
@@ -407,24 +403,6 @@ Note that the template is not used if the "Copy HTML fragment only" setting is e
 				.setValue(this.plugin.settings.showdocUrl)
 				.onChange(async (value) => {
 					this.plugin.settings.showdocUrl = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName('ShowDoc Username')
-			.addText(text => text
-				.setValue(this.plugin.settings.showdocUsername)
-				.onChange(async (value) => {
-					this.plugin.settings.showdocUsername = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName('ShowDoc Password')
-			.addText(text => text
-				.setValue(this.plugin.settings.showdocPassword)
-				.onChange(async (value) => {
-					this.plugin.settings.showdocPassword = value;
 					await this.plugin.saveSettings();
 				}));
 

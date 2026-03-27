@@ -39,26 +39,25 @@ export class ShowDocUploader {
 	public async upload(markdown: string, title: string, file: TFile): Promise<void> {
 		try {
 			new Notice('Uploading to ShowDoc...');
-			const token = await this.client.login();
 
 			// 1. Process Transclusions
 			const expandedMarkdown = await this.processTransclusions(markdown, file);
 
 			// 2. Process Callouts (Convert > [!type] to HTML)
-			// Do this before image replacement so images inside callouts work? 
-			// Or after? HTML inside markdown might affect image regex? 
-			// Better do it before image replacement, as image replacement relies on ![[...]] which is robust. 
+			// Do this before image replacement so images inside callouts work?
+			// Or after? HTML inside markdown might affect image regex?
+			// Better do it before image replacement, as image replacement relies on ![[...]] which is robust.
 			// Callout conversion creates HTML <div>s, which are fine.
 			const markdownWithCallouts = this.processCallouts(expandedMarkdown);
 
 			// 3. Process content (upload images, replace links)
-			const processedMarkdown = await this.replaceImagesInMarkdown(markdownWithCallouts, file, token);
+			const processedMarkdown = await this.replaceImagesInMarkdown(markdownWithCallouts, file);
 
 			// Determine category
 			const catName = this.determineCategory(file);
 
-			// Update article
-			await this.client.updateArticle(title, processedMarkdown, catName, token);
+			// Update page (new API - no login required)
+			await this.client.updatePage(title, processedMarkdown, catName);
 
 		} catch (error) {
 			console.error('Failed to upload to ShowDoc:', error);
@@ -395,7 +394,7 @@ export class ShowDocUploader {
 		return lines.slice(startLine, endLine + 1).join('\n');
 	}
 
-	private async replaceImagesInMarkdown(markdown: string, containingFile: TFile, token: string): Promise<string> {
+	private async replaceImagesInMarkdown(markdown: string, containingFile: TFile): Promise<string> {
 		// 正则表达式查找 ![[image|...]] 或 ![[image]] 格式的链接
 		const imageRegex = /!\[\[([^||\]]+)(?:\|([^\]]+))?\]\]/gu;
 		const matches = [...markdown.matchAll(imageRegex)];
@@ -426,7 +425,7 @@ export class ShowDocUploader {
 		}));
 
 		const uploadPromises = matches.map(match =>
-			this.processSingleImage(match, containingFile, imgElements, token)
+			this.processSingleImage(match, containingFile, imgElements)
 		);
 
 		const results = await Promise.all(uploadPromises);
@@ -444,8 +443,7 @@ export class ShowDocUploader {
 	private async processSingleImage(
 		match: RegExpMatchArray,
 		containingFile: TFile,
-		imgElements: HTMLImageElement[],
-		token: string
+		imgElements: HTMLImageElement[]
 	): Promise<ImageProcessResult> {
 		const fullLink = match[0];
 		const linkPath = match[1]; // path part e.g. "Assets/Image.png" or "Image.png"
@@ -475,11 +473,11 @@ export class ShowDocUploader {
 			if (this.isConvertible(imageFile, cleanPath)) {
 				// Handle conversions (SVG/Excalidraw)
 				this.debug('File is convertible, handling with conversion');
-				url = await this.handleConvertibleImage(imageFile, imgElement, token);
+				url = await this.handleConvertibleImage(imageFile, imgElement);
 			} else {
 				// Regular upload
 				this.debug('File is regular image, uploading directly');
-				url = await this.uploadRegularImage(imageFile, token);
+				url = await this.uploadRegularImage(imageFile);
 			}
 
 			this.debug('Upload result:', url ? 'SUCCESS' : 'FAILED');
@@ -551,8 +549,8 @@ export class ShowDocUploader {
 		return null;
 	}
 
-	private async uploadRegularImage(file: TFile, token: string): Promise<string> {
-		return this.client.uploadImage(file, token);
+	private async uploadRegularImage(file: TFile): Promise<string> {
+		return this.client.uploadImage(file);
 	}
 
 	/**
@@ -560,13 +558,12 @@ export class ShowDocUploader {
 	 */
 	private async handleConvertibleImage(
 		file: TFile,
-		imgElement: HTMLImageElement | null,
-		token: string
+		imgElement: HTMLImageElement | null
 	): Promise<string> {
 		if (!imgElement && file.extension !== 'svg') {
 			// If we don't have an img element to render from, and it's not a direct SVG file we can read, we fallback
 			console.warn(`No img element for convertible file ${file.name}, trying raw upload fallback.`);
-			return this.client.uploadImage(file, token);
+			return this.client.uploadImage(file);
 		}
 
 		try {
@@ -578,11 +575,11 @@ export class ShowDocUploader {
 
 			// 3. Upload
 			const dummyFile = { name: name } as any; // Mock TFile-like object for client
-			return await this.client.uploadImageWithData(dummyFile, content, token);
+			return await this.client.uploadImageWithData(dummyFile, content);
 
 		} catch (err) {
 			console.error(`Conversion upload failed for ${file.name}, falling back to raw upload.`, err);
-			return this.client.uploadImage(file, token);
+			return this.client.uploadImage(file);
 		}
 	}
 

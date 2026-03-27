@@ -200,8 +200,8 @@ export default class CopyDocumentAsHTMLPlugin extends Plugin {
 	private async executeUpload(file: TFile) {
 		// Validations
 		const s = this.settings;
-		if (!s.showdocUrl || !s.showdocUsername || !s.showdocPassword) {
-			new Notice('ShowDoc login credentials are not configured');
+		if (!s.showdocUrl) {
+			new Notice('ShowDoc URL is not configured');
 			return;
 		}
 		if (!s.showdocApiKey || !s.showdocApiToken) {
